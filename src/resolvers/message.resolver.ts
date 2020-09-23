@@ -5,13 +5,18 @@ import {
   Query,
   ResolveField,
   Resolver,
+  Subscription,
 } from '@nestjs/graphql';
+import { PubSub } from 'graphql-subscriptions';
+
 import RepoService from '../repo.service';
 
 import Message from '../db/models/message.entity';
 import User from 'src/db/models/user.entity';
 
-import MessageInput from './input/message.input';
+import MessageInput, { DeleteMessageInput } from './input/message.input';
+
+export const pubSub = new PubSub();
 
 @Resolver(() => Message)
 export default class MessageResolver {
@@ -47,7 +52,34 @@ export default class MessageResolver {
       content: input.content,
     });
 
-    return this.repoService.messageRepo.save(message);
+    const response = await this.repoService.messageRepo.save(message);
+
+    pubSub.publish('messageAdded', { messageAdded: message });
+
+    return response;
+  }
+
+  @Mutation(() => Message, { nullable: true })
+  public async deleteMessage(
+    @Args('data') input: DeleteMessageInput,
+  ): Promise<Message> {
+    const message = await this.repoService.messageRepo.findOne(input.id);
+
+    if (!message || message.userId !== input.userId)
+      throw new Error(
+        'Message does not exist or you are not the message author',
+      );
+
+    const copy = { ...message };
+
+    await this.repoService.messageRepo.remove(message);
+
+    return copy;
+  }
+
+  @Subscription(() => Message)
+  messageAdded() {
+    return pubSub.asyncIterator('messageAdded');
   }
 
   @ResolveField(() => User, { name: 'user' })
